@@ -7,7 +7,8 @@ const SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
 
 app.post('/payments/create', async (req, res) => {
     try {
-        // Auth Header (Dapat may colon sa dulo)
+        if (!SECRET_KEY) throw new Error("Missing SECRET_KEY in Render Settings");
+
         const authHeader = `Basic ${Buffer.from(SECRET_KEY + ':').toString('base64')}`;
         const { amount, description } = req.body;
 
@@ -23,22 +24,38 @@ app.post('/payments/create', async (req, res) => {
             data: { attributes: { type: 'qrph' } }
         }, { headers: { Authorization: authHeader } });
 
-        // 3. Attach (Dito kukunin ang TOTOONG QR image URL)
+        const methodId = method.data.data.id;
+
+        // 3. Attach Method
         const attachment = await axios.post(`https://api.paymongo.com/v1/payment_intents/${intentId}/attach`, {
-            data: { attributes: { payment_method: method.data.data.id } }
+            data: { attributes: { payment_method: methodId } }
         }, { headers: { Authorization: authHeader } });
 
-        // Ibibigay na natin ang lahat ng fields na kailangan ng Android App
+        const attr = attachment.data.data.attributes;
+
+        // --- SAFE CHECK PARA SA QR CODE ---
+        let qrCode = null;
+        if (attr.next_action && attr.next_action.show_qr_code) {
+            qrCode = attr.next_action.show_qr_code.url;
+        }
+
+        // Kung walang QR Code, huwag mag-crash, magbigay ng message
+        if (!qrCode) {
+            console.log("PayMongo Status:", attr.status);
+            return res.status(400).json({ 
+                error: `PayMongo status is '${attr.status}' but no QR code was generated. Please check your PayMongo Dashboard if QRPh is enabled.` 
+            });
+        }
+
         res.json({
             id: intentId,
-            status: attachment.data.data.attributes.status,
-            amount: amount,
+            status: attr.status,
+            amount: attr.amount,
             checkout_url: null,
-            qr_code: attachment.data.data.attributes.next_action.show_qr_code.url
+            qr_code: qrCode
         });
 
     } catch (error) {
-        // Pag nag-error, sasabihin natin kung bakit
         const msg = error.response?.data?.errors?.[0]?.detail || error.message;
         console.error("PayMongo Error:", msg);
         res.status(400).json({ error: msg });
@@ -51,17 +68,18 @@ app.get('/payments/status/:id', async (req, res) => {
         const response = await axios.get(`https://api.paymongo.com/v1/payment_intents/${req.params.id}`, {
             headers: { Authorization: authHeader }
         });
-        res.json({ 
-            id: req.params.id, 
-            status: response.data.data.attributes.status,
-            amount: response.data.data.attributes.amount,
-            qr_code: null,
-            checkout_url: null
+        const attr = response.data.data.attributes;
+        res.json({
+            id: req.params.id,
+            status: attr.status,
+            amount: attr.amount,
+            checkout_url: null,
+            qr_code: null
         });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/', (req, res) => res.send("Pow.ai Payment Server is LIVE!"));
+app.get('/', (req, res) => res.send("Pow.ai Payment Server is LIVE and Ready!"));
 app.listen(process.env.PORT || 3000, '0.0.0.0');
