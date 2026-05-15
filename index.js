@@ -7,48 +7,42 @@ const SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
 
 app.post('/payments/create', async (req, res) => {
     try {
-        if (!SECRET_KEY) throw new Error("Missing SECRET_KEY in Render Environment Variables");
-
-        // Basic Auth: Secret Key + Colon (:) encoded in Base64
+        if (!SECRET_KEY) throw new Error("Missing SECRET_KEY in Render");
         const authHeader = `Basic ${Buffer.from(SECRET_KEY + ':').toString('base64')}`;
         const { amount, description } = req.body;
 
-        console.log("Step 1: Creating Payment Intent...");
+        // 1. Create Payment Intent
         const intent = await axios.post('https://api.paymongo.com/v1/payment_intents', {
             data: { attributes: { amount, payment_method_allowed: ['qrph'], currency: 'PHP', description } }
         }, { headers: { Authorization: authHeader } });
 
-        const intentId = intent.data.data.id;
+        const intentData = intent.data.data;
 
-        console.log("Step 2: Creating Payment Method...");
+        // 2. Create Payment Method (QRPH)
         const method = await axios.post('https://api.paymongo.com/v1/payment_methods', {
             data: { attributes: { type: 'qrph' } }
         }, { headers: { Authorization: authHeader } });
 
-        const methodId = method.data.data.id;
-
-        console.log("Step 3: Attaching Method to Intent...");
-        const attachment = await axios.post(`https://api.paymongo.com/v1/payment_intents/${intentId}/attach`, {
-            data: { attributes: { payment_method: methodId } }
+        // 3. Attach Method
+        const attachment = await axios.post(`https://api.paymongo.com/v1/payment_intents/${intentData.id}/attach`, {
+            data: { attributes: { payment_method: method.data.data.id } }
         }, { headers: { Authorization: authHeader } });
 
-        const nextAction = attachment.data.data.attributes.next_action;
+        const attr = attachment.data.data.attributes;
 
-        if (nextAction && nextAction.show_qr_code) {
-            console.log("Success! QR URL generated.");
-            res.json({
-                id: intentId,
-                qr_code: nextAction.show_qr_code.url,
-                status: "awaiting_payment"
-            });
-        } else {
-            throw new Error("PayMongo did not return a QR code URL.");
-        }
+        // SIGURADUHIN na lahat ng fields sa PaymentResponse (Models.kt) ay may laman
+        res.json({
+            id: intentData.id,
+            status: attr.status,
+            amount: attr.amount,
+            checkout_url: null,
+            qr_code: attr.next_action.show_qr_code.url
+        });
 
     } catch (error) {
-        const errorMessage = error.response?.data?.errors?.[0]?.detail || error.message;
-        console.error("PayMongo Error:", errorMessage);
-        res.status(400).json({ error: errorMessage });
+        const msg = error.response?.data?.errors?.[0]?.detail || error.message;
+        console.error("PayMongo Error:", msg);
+        res.status(400).json({ error: msg });
     }
 });
 
@@ -58,12 +52,18 @@ app.get('/payments/status/:id', async (req, res) => {
         const response = await axios.get(`https://api.paymongo.com/v1/payment_intents/${req.params.id}`, {
             headers: { Authorization: authHeader }
         });
-        res.json({ id: req.params.id, status: response.data.data.attributes.status });
+        const attr = response.data.data.attributes;
+        res.json({
+            id: req.params.id,
+            status: attr.status,
+            amount: attr.amount,
+            checkout_url: null,
+            qr_code: null
+        });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/', (req, res) => res.send("Pow.ai Backend is Online and Ready!"));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, '0.0.0.0', () => console.log(`Server live on port ${PORT}`));
+app.get('/', (req, res) => res.send("Pow.ai Payment Server is LIVE!"));
+app.listen(process.env.PORT || 3000, '0.0.0.0');
