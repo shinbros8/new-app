@@ -5,15 +5,14 @@ app.use(express.json());
 
 const SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
 
+// Helper function para mag-antay (sleep)
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 app.post('/payments/create', async (req, res) => {
     try {
-        if (!SECRET_KEY) throw new Error("Missing SECRET_KEY in Render Settings");
-
-        // Auth Header Fix: Siguradong may colon (:) sa dulo
+        if (!SECRET_KEY) throw new Error("Missing SECRET_KEY");
         const authHeader = `Basic ${Buffer.from(SECRET_KEY + ':').toString('base64')}`;
         const { amount, description } = req.body;
-
-        console.log("--- Payment Request Started ---");
 
         // 1. Create Payment Intent
         const intent = await axios.post('https://api.paymongo.com/v1/payment_intents', {
@@ -22,7 +21,7 @@ app.post('/payments/create', async (req, res) => {
 
         const intentId = intent.data.data.id;
 
-        // 2. Create Payment Method (QRPH)
+        // 2. Create Payment Method
         const method = await axios.post('https://api.paymongo.com/v1/payment_methods', {
             data: { attributes: { type: 'qrph' } }
         }, { headers: { Authorization: authHeader } });
@@ -30,44 +29,49 @@ app.post('/payments/create', async (req, res) => {
         const methodId = method.data.data.id;
 
         // 3. Attach Method
-        const attachment = await axios.post(`https://api.paymongo.com/v1/payment_intents/${intentId}/attach`, {
+        let attachment = await axios.post(`https://api.paymongo.com/v1/payment_intents/${intentId}/attach`, {
             data: { attributes: { payment_method: methodId } }
         }, { headers: { Authorization: authHeader } });
 
-        const attr = attachment.data.data.attributes;
-        const nextAction = attr.next_action;
+        let attr = attachment.data.data.attributes;
 
-        let qrCodeUrl = null;
+        // --- RETRY LOGIC (Importante!) ---
+        // Kung awaiting_next_action pero wala pang QR, tanungin ulit ang PayMongo pagkalipas ng 2 segundo
+        if (attr.status === 'awaiting_next_action' && (!attr.next_action || !attr.next_action.show_qr_code)) {
+            console.log("QR not ready, waiting 2 seconds...");
+            await wait(2000);
+            const refresh = await axios.get(`https://api.paymongo.com/v1/payment_intents/${intentId}`, {
+                headers: { Authorization: authHeader }
+            });
+            attr = refresh.data.data.attributes;
+        }
 
-        // Kunin ang QR Code URL mula sa iba't ibang posibleng location
-        if (nextAction) {
-            if (nextAction.show_qr_code) {
-                qrCodeUrl = nextAction.show_qr_code.url;
-            } else if (nextAction.redirect) {
-                qrCodeUrl = nextAction.redirect.url;
+        // --- HANAPIN ANG URL ---
+        let finalUrl = null;
+        if (attr.next_action) {
+            if (attr.next_action.show_qr_code) {
+                finalUrl = attr.next_action.show_qr_code.url;
+            } else if (attr.next_action.redirect) {
+                finalUrl = attr.next_action.redirect.url;
             }
         }
 
-        // Kung wala talagang mahanap na QR
-        if (!qrCodeUrl) {
-            console.error("PayMongo Response Data:", JSON.stringify(attr, null, 2));
+        if (!finalUrl) {
             return res.status(400).json({ 
-                error: `PayMongo status is '${attr.status}' but no QR code was generated. Please contact PayMongo support to verify your QRPh Live status.` 
+                error: `PayMongo status: ${attr.status}. QR code still not generated. Please try again or check PayMongo Dashboard.` 
             });
         }
 
-        console.log("Success! QR/Link found:", qrCodeUrl);
         res.json({
             id: intentId,
             status: attr.status,
             amount: amount,
-            checkout_url: qrCodeUrl,
-            qr_code: qrCodeUrl
+            checkout_url: finalUrl,
+            qr_code: finalUrl
         });
 
     } catch (error) {
         const msg = error.response?.data?.errors?.[0]?.detail || error.message;
-        console.error("PayMongo Error:", msg);
         res.status(400).json({ error: msg });
     }
 });
@@ -85,5 +89,5 @@ app.get('/payments/status/:id', async (req, res) => {
     }
 });
 
-app.get('/', (req, res) => res.send("Pow.ai Payment Server is LIVE!"));
+app.get('/', (req, res) => res.send("Pow.ai Payment Server is LIVE"));
 app.listen(process.env.PORT || 3000, '0.0.0.0');
