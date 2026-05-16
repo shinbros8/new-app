@@ -1,18 +1,18 @@
 const express = require('express');
-const axios = require('axios');
-const app = express();
+const axios = require('axios');const app = express();
 app.use(express.json());
 
 const SECRET_KEY = process.env.PAYMONGO_SECRET_KEY;
 
-// Helper function para mag-antay (sleep)
+// Helper function para mag-antay
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.post('/payments/create', async (req, res) => {
     try {
         if (!SECRET_KEY) throw new Error("Missing SECRET_KEY");
         const authHeader = `Basic ${Buffer.from(SECRET_KEY + ':').toString('base64')}`;
-        const { amount, description } = req.body;
+        const amount = parseInt(req.body.amount);
+        const description = req.body.description;
 
         // 1. Create Payment Intent
         const intent = await axios.post('https://api.paymongo.com/v1/payment_intents', {
@@ -21,7 +21,7 @@ app.post('/payments/create', async (req, res) => {
 
         const intentId = intent.data.data.id;
 
-        // 2. Create Payment Method
+        // 2. Create Payment Method (QRPH)
         const method = await axios.post('https://api.paymongo.com/v1/payment_methods', {
             data: { attributes: { type: 'qrph' } }
         }, { headers: { Authorization: authHeader } });
@@ -35,39 +35,28 @@ app.post('/payments/create', async (req, res) => {
 
         let attr = attachment.data.data.attributes;
 
-        // --- RETRY LOGIC (Importante!) ---
-        // Kung awaiting_next_action pero wala pang QR, tanungin ulit ang PayMongo pagkalipas ng 2 segundo
+        // --- RETRY LOGIC: Kung wala pang QR, hintay ng 2 seconds ---
         if (attr.status === 'awaiting_next_action' && (!attr.next_action || !attr.next_action.show_qr_code)) {
-            console.log("QR not ready, waiting 2 seconds...");
-            await wait(2000);
+            await wait(2000); // Mag-antay ng 2 seconds
             const refresh = await axios.get(`https://api.paymongo.com/v1/payment_intents/${intentId}`, {
                 headers: { Authorization: authHeader }
             });
             attr = refresh.data.data.attributes;
         }
 
-        // --- HANAPIN ANG URL ---
-        let finalUrl = null;
-        if (attr.next_action) {
-            if (attr.next_action.show_qr_code) {
-                finalUrl = attr.next_action.show_qr_code.url;
-            } else if (attr.next_action.redirect) {
-                finalUrl = attr.next_action.redirect.url;
-            }
-        }
+        // --- KUHAIN ANG URL ---
+        const qrCodeUrl = attr.next_action?.show_qr_code?.url || attr.next_action?.redirect?.url;
 
-        if (!finalUrl) {
-            return res.status(400).json({ 
-                error: `PayMongo status: ${attr.status}. QR code still not generated. Please try again or check PayMongo Dashboard.` 
-            });
+        if (!qrCodeUrl) {
+            return res.status(400).json({ error: "QR Code generation failed. Please check PayMongo Dashboard." });
         }
 
         res.json({
             id: intentId,
             status: attr.status,
-            amount: amount,
-            checkout_url: finalUrl,
-            qr_code: finalUrl
+            amount: attr.amount,
+            checkout_url: qrCodeUrl,
+            qr_code: qrCodeUrl
         });
 
     } catch (error) {
@@ -82,12 +71,11 @@ app.get('/payments/status/:id', async (req, res) => {
         const response = await axios.get(`https://api.paymongo.com/v1/payment_intents/${req.params.id}`, {
             headers: { Authorization: authHeader }
         });
-        const attr = response.data.data.attributes;
-        res.json({ id: req.params.id, status: attr.status, amount: attr.amount });
+        res.json({ id: req.params.id, status: response.data.data.attributes.status });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-app.get('/', (req, res) => res.send("Pow.ai Payment Server is LIVE"));
+app.get('/', (req, res) => res.send("Pow.ai Payment Server LIVE"));
 app.listen(process.env.PORT || 3000, '0.0.0.0');
