@@ -90,5 +90,9 @@ app.get('/payments/status/:id', async (req, res) => {
     }
 });
 
+app.get('/', (req, res) => {
+    res.send('Pow.ai PayPal Backend is Running!');
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
