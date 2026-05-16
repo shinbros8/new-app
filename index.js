@@ -10,7 +10,7 @@ app.use(bodyParser.json());
 // PayPal Credentials - Using Environment Variables for Security
 const clientId = process.env.PAYPAL_CLIENT_ID || "AZUcAHvmopKagMv4Afte76e-cThAJ_RMDZvTVIPIRdWw-QgEseTfSDk6OCy1Qx0eeU7BFOIAGxhj4-go";
 const clientSecret = process.env.PAYPAL_CLIENT_SECRET || "ELitHCbCxJjG8VPsHBkfW7eTFFK-uQccD4aug2B-RMkC3dn8HWOvL5RgauhkZsKI3yF5KYkH0ycvCyL3";
-const mode = (process.env.PAYPAL_MODE || 'sandbox').toLowerCase();
+const mode = (process.env.PAYPAL_MODE || 'live').toLowerCase();
 
 console.log("------------------------------------------");
 console.log(`PayPal Mode: ${mode.toUpperCase()}`);
