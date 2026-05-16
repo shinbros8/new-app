@@ -7,11 +7,16 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// PayPal Credentials
-const clientId = "AZUcAHvmopKagMv4Afte76e-cThAJ_RMDZvTVIPIRdWw-QgEseTfSDk6OCy1Qx0eeU7BFOIAGxhj4-go";
-const clientSecret = "ELitHCbCxJjG8VPsHBkfW7eTFFK-uQccD4aug2B-RMkC3dn8HWOvL5RgauhkZsKI3yF5KYkH0ycvCyL3";
+// PayPal Credentials - Using Environment Variables for Security
+const clientId = process.env.PAYPAL_CLIENT_ID || "AZUcAHvmopKagMv4Afte76e-cThAJ_RMDZvTVIPIRdWw-QgEseTfSDk6OCy1Qx0eeU7BFOIAGxhj4-go";
+const clientSecret = process.env.PAYPAL_CLIENT_SECRET || "ELitHCbCxJjG8VPsHBkfW7eTFFK-uQccD4aug2B-RMkC3dn8HWOvL5RgauhkZsKI3yF5KYkH0ycvCyL3";
+const mode = (process.env.PAYPAL_MODE || 'sandbox').toLowerCase();
 
-let environment = new paypal.core.SandboxEnvironment(clientId, clientSecret);
+// Environment Setup
+let environment = mode === 'live'
+    ? new paypal.core.LiveEnvironment(clientId, clientSecret)
+    : new paypal.core.SandboxEnvironment(clientId, clientSecret);
+
 let client = new paypal.core.PayPalHttpClient(environment);
 
 // Endpoint: Create Payment
@@ -28,7 +33,7 @@ app.post('/payments/create', async (req, res) => {
                 currency_code: 'USD',
                 value: formattedAmount
             },
-            description: description || "Pow.ai Premium"
+            description: description || "Pow.ai Subscription"
         }],
         application_context: {
             brand_name: "Pow.ai",
@@ -42,7 +47,6 @@ app.post('/payments/create', async (req, res) => {
         const order = await client.execute(request);
         const approveLink = order.result.links.find(link => link.rel === 'approve');
 
-        // Mahalaga: Isama ang 'amount' dahil required ito sa Android PaymentResponse model
         res.json({
             id: order.result.id,
             status: order.result.status,
@@ -69,7 +73,7 @@ app.get('/payments/status/:id', async (req, res) => {
             return res.json({
                 id: orderId,
                 status: capture.result.status,
-                amount: 0, // Placeholder
+                amount: 0,
                 checkout_url: null,
                 qr_code: null
             });
@@ -91,8 +95,8 @@ app.get('/payments/status/:id', async (req, res) => {
 });
 
 app.get('/', (req, res) => {
-    res.send('Pow.ai PayPal Backend is Running!');
+    res.send(`Pow.ai PayPal Backend is Running in ${mode} mode!`);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT} in ${mode} mode`));
